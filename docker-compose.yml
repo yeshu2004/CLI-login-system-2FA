@@ -1,0 +1,10 @@
+services:
+  cli-login:
+    build: .
+    stdin_open: true
+    tty: true
+    volumes:
+      - sqlite-data:/app/data
+
+volumes:
+  sqlite-data:
