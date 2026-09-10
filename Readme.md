@@ -84,15 +84,21 @@ Containerized CLI Login System — type 'help' for commands, 'exit' to quit.
 
 ## Running With Docker
 
-Build and start the application:
+Build the Docker image:
 
 ```bash
-docker compose up --build
+docker compose build
 ```
 
-The CLI runs interactively inside the container.
+Run the CLI with an interactive terminal:
 
-To stop it:
+```bash
+docker compose run --rm cli-login
+```
+
+This starts the CLI in an interactive terminal, allowing you to enter commands
+
+To stop and remove the containers:
 
 ```bash
 docker compose down
