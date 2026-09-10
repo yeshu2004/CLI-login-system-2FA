@@ -6,6 +6,6 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret TEXT,
     failed_attempts INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_login_at DATETIME
+    last_login_at DATETIME,
     locked_until DATETIME
 );

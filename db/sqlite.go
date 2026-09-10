@@ -44,7 +44,7 @@ func ConnectDB() (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	log.Println("Connected to SQL Database!")
+	// log.Println("Connected to SQL Database!")
 
 	query, err := os.ReadFile("./db/users.sql")
 	if err != nil {
