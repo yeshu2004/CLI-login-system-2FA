@@ -18,7 +18,7 @@ type User struct {
 	MFAEnabled   int
 	TOTPSecret     string
 	FailedAttempts int
-	// LockedUntil    *time.Time
+	LockedUntil    *time.Time
 	CreatedAt   time.Time
 	LastLoginAt *time.Time
 }
