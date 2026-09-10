@@ -72,12 +72,13 @@ func (db *DB) RegisterUser(ctx context.Context, username string, passwordHash st
 	return nil
 }
 
-
 func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
-	query := `SELECT user_id, user_name, password_hash, mfa_enabled, failed_attempts, created_at, last_login_at FROM users WHERE user_name = ?`
+	var totpSecret sql.NullString
 
-	err := d.Conn.QueryRowContext(ctx, query, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.MFAEnabled, &user.FailedAttempts, &user.CreatedAt, &user.LastLoginAt)
+	query := `SELECT user_id, user_name, password_hash, mfa_enabled, failed_attempts, created_at, last_login_at, totp_secret FROM users WHERE user_name = ?`
+
+	err := d.Conn.QueryRowContext(ctx, query, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.MFAEnabled, &user.FailedAttempts, &user.CreatedAt, &user.LastLoginAt, &totpSecret)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -87,21 +88,53 @@ func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.Use
 		return nil, err
 	}
 
+	if totpSecret.Valid {
+		user.TOTPSecret = totpSecret.String
+	}
+
 	return &user, nil
 }
 
-func (db *DB) UpdateLastLogin(ctx context.Context, userId int64, time time.Time) error{
+func (db *DB) UpdateLastLogin(ctx context.Context, userId int64, time time.Time) error {
 	query := `UPDATE users SET last_login_at = ? WHERE user_id = ?`
 
-	row, err := db.Conn.ExecContext(ctx, query, time, userId);
+	row, err := db.Conn.ExecContext(ctx, query, time, userId)
 
-	if err != nil{
-		return err;
+	if err != nil {
+		return err
 	}
 
-	_, err = row.RowsAffected();
-	if err != nil{
-		return err;
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
 	}
-	return nil;
+	return nil
+}
+
+func (d *DB) EnableMFA(ctx context.Context, userID int64, secret string) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET mfa_enabled = 1, totp_secret = ? WHERE user_id = ?`, secret, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *DB) DisableMFA(ctx context.Context, userID int64) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET mfa_enabled = 0, totp_secret = NULL WHERE user_id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
 	"github/yeshu2004/cli-login/db"
 	"github/yeshu2004/cli-login/model"
+
+	"github.com/chzyer/readline"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -64,6 +66,10 @@ func main() {
 			if cli.isAuthenticated() {
 				cli.whoami()
 			}
+		case model.ENABLE2FA:
+			cli.enable2FA()
+		case model.DISABLE2FA:
+			cli.disable2FA()
 		case model.LOGOUT:
 			cli.logout()
 		case model.EXIT:
@@ -80,10 +86,12 @@ func main() {
 
 func displayAllCommands() {
 	fmt.Println("register - create a new account")
-    fmt.Println("login - login to your account")
-    fmt.Println("whoami - show current user")
-    fmt.Println("logout - logout from current session")
-    fmt.Println("exit - quit")
+	fmt.Println("login - login to your account")
+	fmt.Println("whoami - show current user")
+	fmt.Println("enable-2fa - enable two-factor authentication")
+	fmt.Println("disable-2fa - disable two-factor authentication")
+	fmt.Println("logout - logout from current session")
+	fmt.Println("exit - quit")
 }
 
 func (cli *CLI) logout() {
@@ -128,6 +136,106 @@ func (cli *CLI) registerUser() {
 	fmt.Println("user registered, you can login now.")
 }
 
+func (cli *CLI) enable2FA() {
+	if !cli.isAuthenticated() {
+		fmt.Println("you are not logged in.")
+		return
+	}
+
+	if cli.CurrentUser.MFAEnabled == 1 {
+		fmt.Println("2FA is already enabled.")
+		return
+	}
+
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "CLI Login System",
+		AccountName: cli.CurrentUser.Username,
+		SecretSize:  20,
+	})
+	if err != nil {
+		fmt.Println("failed to generate 2FA secret:", err)
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("2FA Setup")
+	fmt.Println("---------")
+	fmt.Println("Secret:", key.Secret())
+	fmt.Println("OTP URL:", key.URL())
+	fmt.Println()
+	fmt.Println("Add this account to Google Authenticator.")
+	fmt.Println()
+
+	cli.Rl.SetPrompt("Enter the 6-digit code: ")
+	defer cli.Rl.SetPrompt("> ")
+
+	code, err := cli.Rl.Readline()
+	if err != nil {
+		return
+	}
+
+	code = strings.TrimSpace(code)
+	valid := totp.Validate(code, key.Secret())
+	if !valid {
+		fmt.Println("invalid authentication code.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := cli.Db.EnableMFA(ctx, cli.CurrentUser.ID, key.Secret()); err != nil {
+		fmt.Println("failed to enable 2FA:", err)
+		return
+	}
+
+	cli.CurrentUser.MFAEnabled = 1
+	cli.CurrentUser.TOTPSecret = key.Secret()
+
+	fmt.Println("2FA enabled successfully.")
+}
+
+func (cli *CLI) disable2FA() {
+	if !cli.isAuthenticated() {
+		fmt.Println("you are not logged in.")
+		return
+	}
+
+	if cli.CurrentUser.MFAEnabled == 0 {
+		fmt.Println("2FA is already disabled.")
+		return
+	}
+
+	cli.Rl.SetPrompt("Enter the 6-digit authentication code: ")
+	defer cli.Rl.SetPrompt("> ")
+
+	code, err := cli.Rl.Readline()
+	if err != nil {
+		return
+	}
+
+	code = strings.TrimSpace(code)
+
+	if !totp.Validate(code, cli.CurrentUser.TOTPSecret) {
+		fmt.Println("invalid authentication code.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = cli.Db.DisableMFA(ctx, cli.CurrentUser.ID)
+	if err != nil {
+		fmt.Println("failed to disable 2FA:", err)
+		return
+	}
+
+	cli.CurrentUser.MFAEnabled = 0
+	cli.CurrentUser.TOTPSecret = ""
+
+	fmt.Println("2FA disabled successfully.")
+}
+
 func (cli *CLI) loginUser() {
 	cli.Rl.SetPrompt("Enter the username: ")
 	inp, err := cli.Rl.Readline()
@@ -161,14 +269,33 @@ func (cli *CLI) loginUser() {
 		return
 	}
 
+	if user.MFAEnabled == 1 {
+		cli.Rl.SetPrompt("Enter the 6-digit authentication code: ")
+		defer cli.Rl.SetPrompt("> ")
+
+		code, err := cli.Rl.Readline()
+		if err != nil {
+			return
+		}
+
+		code = strings.TrimSpace(code)
+
+		if !totp.Validate(code, user.TOTPSecret) {
+			fmt.Println("invalid authentication code.")
+			return
+		}
+	}
+
 	now := time.Now()
 
 	cli.CurrentUser = user
 	cli.SessionExpiresAt = now.Add(sessionDuration)
 
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	err = cli.Db.UpdateLastLogin(ctx, user.ID, now)
 	if err != nil {
-		fmt.Println("login successful, but failed to update login time")
+		fmt.Printf("login successful, but failed to update login time: %v\n", err)
 		return
 	}
 
