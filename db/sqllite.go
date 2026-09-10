@@ -75,10 +75,11 @@ func (db *DB) RegisterUser(ctx context.Context, username string, passwordHash st
 func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
 	var totpSecret sql.NullString
+	var lockedUntil sql.NullTime
 
-	query := `SELECT user_id, user_name, password_hash, mfa_enabled, failed_attempts, created_at, last_login_at, totp_secret FROM users WHERE user_name = ?`
+	query := `SELECT user_id, user_name, password_hash, mfa_enabled, failed_attempts, created_at, last_login_at, totp_secret, locked_until FROM users WHERE user_name = ?`
 
-	err := d.Conn.QueryRowContext(ctx, query, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.MFAEnabled, &user.FailedAttempts, &user.CreatedAt, &user.LastLoginAt, &totpSecret)
+	err := d.Conn.QueryRowContext(ctx, query, username).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.MFAEnabled, &user.FailedAttempts, &user.CreatedAt, &user.LastLoginAt, &totpSecret, &lockedUntil)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -90,6 +91,10 @@ func (d *DB) GetUserByUsername(ctx context.Context, username string) (*model.Use
 
 	if totpSecret.Valid {
 		user.TOTPSecret = totpSecret.String
+	}
+
+	if lockedUntil.Valid {
+		user.LockedUntil = &lockedUntil.Time
 	}
 
 	return &user, nil
@@ -136,5 +141,57 @@ func (d *DB) DisableMFA(ctx context.Context, userID int64) error {
 		return err
 	}
 
+	return nil
+}
+
+func (d *DB) IncrementFailedAttempts(ctx context.Context, userID int64) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET failed_attempts = failed_attempts + 1 WHERE user_id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DB) ResetFailedAttempts(ctx context.Context, userID int64) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE user_id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DB) LockUser(ctx context.Context, userID int64, lockedUntil time.Time) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET locked_until = ? WHERE user_id = ?`, lockedUntil, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *DB) ClearLock(ctx context.Context, userID int64) error {
+	row, err := d.Conn.ExecContext(ctx, `UPDATE users SET locked_until = NULL, failed_attempts = 0 WHERE user_id = ?`, userID)
+	if err != nil {
+		return err
+	}
+
+	_, err = row.RowsAffected()
+	if err != nil {
+		return err
+	}
 	return nil
 }

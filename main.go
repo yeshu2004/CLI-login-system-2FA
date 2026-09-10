@@ -16,7 +16,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const sessionDuration = 30 * time.Minute
+const (
+	maxFailedAttempts = 5
+	lockDuration      = 15 * time.Minute
+	sessionDuration   = 30 * time.Minute
+)
 
 type CLI struct {
 	Rl *readline.Instance
@@ -63,9 +67,7 @@ func main() {
 		case model.LOGIN:
 			cli.loginUser()
 		case model.WHOAMI:
-			if cli.isAuthenticated() {
 				cli.whoami()
-			}
 		case model.ENABLE2FA:
 			cli.enable2FA()
 		case model.DISABLE2FA:
@@ -258,16 +260,63 @@ func (cli *CLI) loginUser() {
 		return
 	}
 
+	// check if the account still have the lock
+	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+		fmt.Println("account is locked.")
+		fmt.Println("try again after:", user.LockedUntil.Format("02 Jan 2006 15:04:05"))
+		return
+	}
+
+	// if lock period has expired, clear the lock
+	if user.LockedUntil != nil && time.Now().After(*user.LockedUntil) {
+		err = cli.Db.ClearLock(ctx, user.ID)
+		if err != nil {
+			fmt.Println("error clearing account lock:", err)
+			return
+		}
+
+		user.LockedUntil = nil
+		user.FailedAttempts = 0
+	}
+
 	b, err := cli.Rl.ReadPassword("Enter the password: ")
 	if err != nil {
 		fmt.Println("error reading password:", err)
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), b); err != nil {
-		// passowrd does not matches
+		// passowrd does not matches, incr the faild attempt
+		err = cli.Db.IncrementFailedAttempts(ctx, user.ID)
+		if err != nil {
+			fmt.Println("error updating failed attempts:", err)
+			return
+		}
+
+		user.FailedAttempts++
 		fmt.Println("invalid username or password.")
+
+		// lock after 5 failed attempts
+		if user.FailedAttempts >= maxFailedAttempts {
+			lockedUntil := time.Now().Add(lockDuration)
+
+			err = cli.Db.LockUser(ctx, user.ID, lockedUntil)
+			if err != nil {
+				fmt.Println("error locking account:", err)
+				return
+			}
+
+			fmt.Println("account locked for 15 minutes.")
+		}
 		return
 	}
+
+	// if password correct reset failed attempts
+	err = cli.Db.ResetFailedAttempts(ctx, user.ID)
+	if err != nil {
+		fmt.Println("error resetting failed attempts:", err)
+		return
+	}
+	user.FailedAttempts = 0
 
 	if user.MFAEnabled == 1 {
 		cli.Rl.SetPrompt("Enter the 6-digit authentication code: ")
@@ -314,7 +363,7 @@ func (cli *CLI) loginUser() {
 }
 
 func (cli *CLI) whoami() {
-	if cli.CurrentUser == nil {
+	if !cli.isAuthenticated(){
 		fmt.Println("you are not logged in.")
 		return
 	}
@@ -332,7 +381,6 @@ func (cli *CLI) whoami() {
 
 func (cli *CLI) isAuthenticated() bool {
 	if cli.CurrentUser == nil {
-		fmt.Println("you are not logged in.")
 		return false
 	}
 
