@@ -3,13 +3,14 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github/yeshu2004/cli-login/model"
 	"log"
 	"os"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 type DB struct {
@@ -66,6 +67,12 @@ func (db *DB) RegisterUser(ctx context.Context, username string, passwordHash st
 
 	_, err := db.Conn.ExecContext(ctx, query, username, passwordHash)
 	if err != nil {
+		var sqliteErr *sqlite.Error;
+		if errors.As(err, &sqliteErr){
+			if sqliteErr.Code() == 2067 {
+				return fmt.Errorf("username already exists, please choose a differnt username or login.")
+			}
+		}
 		return fmt.Errorf("failed to register user: %w", err)
 	}
 

@@ -133,7 +133,8 @@ func (cli *CLI) registerUser() {
 	defer cancel()
 
 	if err := cli.Db.RegisterUser(ctx, userName, string(password)); err != nil {
-		panic(err)
+		fmt.Println(err)
+		return
 	}
 	fmt.Println("user registered, you can login now.")
 }
